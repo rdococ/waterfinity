@@ -822,6 +822,8 @@ elseif default then
             },
         },
         
+        groups = {liquid = 3, water = 3, cools_lava = 3},
+        
         drawtype = "flowingliquid",
         use_texture_alpha = true,
         paramtype = "light",
@@ -856,6 +858,8 @@ elseif default then
                 length = 4,
             },
         }},
+        
+        groups = {liquid = 3, water = 3, cools_lava = 3},
         
         drawtype = "liquid",
         use_texture_alpha = true,
@@ -902,7 +906,8 @@ elseif default then
                 },
             },
         },
-        groups = {lava = 3, igniter = 1},
+        
+        groups = {liquid = 3, lava = 3, igniter = 1},
         
         drawtype = "flowingliquid",
         use_texture_alpha = true,
@@ -1044,7 +1049,7 @@ elseif default then
         minetest.register_abm {
             label = "Finite lava cooling",
             nodenames = {"waterfinity:lava"},
-            neighbors = {"waterfinity:water", "waterfinity:spring"},
+            neighbors = {"group:cools_lava"},
             interval = 1,
             chance = 1,
             catch_up = false,

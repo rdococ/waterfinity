@@ -1058,7 +1058,7 @@ elseif default then
     end
 end
 
-if mesecon then
+if minetest.get_modpath("mesecons") then
     local function on_mvps_move(moved_nodes)
         for _, callback in ipairs(mesecon.on_mvps_move) do
             callback(moved_nodes)

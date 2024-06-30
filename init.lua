@@ -143,7 +143,7 @@ local function update(pos)
         local timeout = timer:get_timeout()
         
         if group(node.name, "waterfinity") > 0 and timeout == 0 or timeout - timer:get_elapsed() >= updateInterval - 0.01 then
-            timer:start(updateInterval)
+            timer:start(updateInterval - (vec.y < 0 and 0.01 or 0))
         end
         
         pos.x, pos.y, pos.z = pos.x - vec.x, pos.y - vec.y, pos.z - vec.z
@@ -453,7 +453,7 @@ function waterfinity.register_liquid(liquidDef)
                             
                         end
                         pos.x, pos.z = pos.x - vecB.x, pos.z - vecB.z
-                    end   
+                    end
                 elseif name == source then
                     sum = sum + 7
                     maxlvl = 7

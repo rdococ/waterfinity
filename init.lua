@@ -142,8 +142,8 @@ local function update(pos)
         local def = defs[node.name] or empty
         local timeout = timer:get_timeout()
         
-        if group(node.name, "waterfinity") > 0 and timeout == 0 or timeout - timer:get_elapsed() >= updateInterval - 0.01 then
-            timer:start(updateInterval - (vec.y < 0 and 0.01 or 0))
+        if group(node.name, "waterfinity") > 0 and timeout == 0 or timeout - timer:get_elapsed() >= updateInterval - 0.05 then
+            timer:start(updateInterval + (vec.y < 0 and -0.1 or vec.y > 0 and 0.1 or 0))
         end
         
         pos.x, pos.y, pos.z = pos.x - vec.x, pos.y - vec.y, pos.z - vec.z

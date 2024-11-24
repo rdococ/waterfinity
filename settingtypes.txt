@@ -14,8 +14,8 @@ waterfinity_jitter (Jittering) bool false
 
 # The time interval between waterfinity updates.
 # Lower values are smoother but impact performance.
-waterfinity_update_interval (Update interval) float 0.25
+waterfinity_update_interval (Update interval) float 0.3
 
 # Overrides ALL liquids into their finite variants.
-# WARNING: This setting is buggy, EXPERIMENTAL and makes irreversible changes to your world!
+# WARNING: This setting is EXPERIMENTAL. It should only be used in new worlds!
 waterfinity_override_all (Override all liquid behaviours [EXPERIMENTAL]) bool false

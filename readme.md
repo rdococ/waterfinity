@@ -13,7 +13,7 @@ Finite liquids implementation for modern Minetest.
 
 * `default`: Finite water and lava replace the 'regular' variants in generation.
 * `buckets`: Custom buckets are supported with basic liquid pickup/place logic. Proper liquid pointing will be available with MT 5.9.
-* `mesecons`: (Currently non-functional) Pistons can push into liquids and compress them against blocks.
+* `mesecons`: Pistons can push into liquids and compress them against blocks. (WIP)
 
 ## API
 

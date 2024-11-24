@@ -1091,7 +1091,7 @@ elseif default then
     end
 end
 
---[[if minetest.get_modpath("mesecons") then
+if minetest.get_modpath("mesecons") then
     local function on_mvps_move(moved_nodes)
         for _, callback in ipairs(mesecon.on_mvps_move) do
             callback(moved_nodes)
@@ -1149,42 +1149,58 @@ end
         -- determine the number of nodes to be pushed
         local nodes = {}
         local pos_set = {}
+        local liquid_data = {}
         local frontiers = mesecon.fifo_queue.new()
         frontiers:add(vector.new(pos))
 
-        local prevLiquid
-        
         for np in frontiers:iter() do
             local np_hash = minetest.hash_node_position(np)
             local nn = not pos_set[np_hash] and minetest.get_node(np)
-            
             if nn and not node_replaceable(nn.name) then
-                local compress = false
-                if defs[nn.name]._waterfinity_flowing == nn.name then
-                    if prevLiquid and prevLiquid.name == nn.name then
-                        if prevLiquid.param2 % 8 + nn.param2 % 8 <= 7 then
-                            compress = true
-                        end
-                    end
-                    prevLiquid = nn
-                else
-                    prevLiquid = nil
-                end
-                
                 pos_set[np_hash] = true
                 table.insert(nodes, {node = nn, pos = np})
                 if #nodes > maximum then return nil end
 
-                if not compress then
-                    -- add connected nodes to frontiers
-                    local nndef = minetest.registered_nodes[nn.name]
-                    if nndef and nndef.mvps_sticky then
-                        local connected = nndef.mvps_sticky(np, nn)
-                        for _, cp in ipairs(connected) do
-                            frontiers:add(cp)
-                        end
+                -- add connected nodes to frontiers
+                local nndef = minetest.registered_nodes[nn.name]
+                if nndef and nndef.mvps_sticky then
+                    local connected = nndef.mvps_sticky(np, nn)
+                    for _, cp in ipairs(connected) do
+                        frontiers:add(cp)
                     end
-
+                end
+                
+                -- If liquid, check if this liquid can compress into the previous liquid
+                local compress = false
+                if defs[nn.name]._waterfinity_flowing == nn.name then
+                    local prevhash = minetest.hash_node_position(vector.subtract(np, dir))
+                    liquid_data[np_hash] = {name = nn.name, ind = #nodes}
+                    
+                    if liquid_data[prevhash] and liquid_data[prevhash].name == nn.name then
+                        local level, count = liquid_data[prevhash].level + getLiquidLevel(np), liquid_data[prevhash].count + 1
+                        
+                        if level <= MAX_LVL * (count - 1) then
+                            compress = {total = level, count = count - 1}
+                        end
+                        
+                        liquid_data[np_hash].level = level
+                        liquid_data[np_hash].count = count
+                    else
+                        liquid_data[np_hash].level = getLiquidLevel(np)
+                        liquid_data[np_hash].count = 1
+                    end
+                end
+                
+                if compress then
+                    local compp = vector.subtract(np, dir)
+                    for i = compress.count, 1, -1 do
+                        local comphash = minetest.hash_node_position(compp)
+                        nodes[liquid_data[comphash].ind].set_level = math.floor(compress.total / compress.count) + (compress.total % compress.count >= i and 1 or 0)
+                        compp = vector.subtract(compp, dir)
+                    end
+                    
+                    table.remove(nodes, #nodes)
+                else
                     frontiers:add(vector.add(np, dir))
 
                     -- If adjacent node is sticky block and connects add that
@@ -1229,41 +1245,14 @@ end
         if not nodes then return end
 
         local protection_check_set = {}
-        local pushing = vector.equals(stackdir, movedir)
-        if pushing then -- pushing
+        if vector.equals(stackdir, movedir) then -- pushing
             add_pos(protection_check_set, pos)
         end
         -- determine if one of the nodes blocks the push / pull
-        local pushLiquid = false
         for id, n in ipairs(nodes) do
             if mesecon.is_mvps_stopper(n.node, movedir, nodes, id) then
                 return
             end
-            if defs[n.node.name]._waterfinity_flowing == n.node.name then
-                -- Nasty hack
-                if pushLiquid then
-                    if n.node.name ~= pushLiquid then return end
-                    
-                    local prev = nodes[id - 1]
-                    local prevLevel = prev.node.param2 % 8
-                    
-                    local totalLevel = prevLevel + n.node.param2 % 8
-                    
-                    if totalLevel <= 7 then
-                        prev.node.param2 = totalLevel
-                        for i = id, #nodes do
-                            table.remove(nodes, id)
-                        end
-                        table.insert(nodes, "stop")
-                        break
-                    end
-                end
-                
-                pushLiquid = n.node.name
-            elseif pushLiquid then
-                return
-            end
-            
             add_pos(protection_check_set, n.pos)
             add_pos(protection_check_set, vector.add(n.pos, movedir))
         end
@@ -1273,8 +1262,6 @@ end
 
         -- remove all nodes
         for _, n in ipairs(nodes) do
-            if n == "stop" then break end
-            
             n.meta = minetest.get_meta(n.pos):to_table()
             local node_timer = minetest.get_node_timer(n.pos)
             if node_timer:is_started() then
@@ -1287,13 +1274,11 @@ end
 
         -- update mesecons for removed nodes ( has to be done after all nodes have been removed )
         for _, n in ipairs(nodes) do
-            if n == "stop" then break end
             mesecon.on_dignode(n.pos, n.node)
         end
 
         -- add nodes
         for _, n in ipairs(nodes) do
-            if n == "stop" then break end
             local np = vector.add(n.pos, movedir)
 
             -- Turn off conductors in transit
@@ -1303,6 +1288,10 @@ end
             end
 
             minetest.set_node(np, n.node)
+            if n.set_level then
+                setLiquidLevel(np, n.set_level)
+            end
+            
             minetest.get_meta(np):from_table(n.meta)
             if n.node_timer then
                 minetest.get_node_timer(np):set(unpack(n.node_timer))
@@ -1311,8 +1300,6 @@ end
 
         local moved_nodes = {}
         for i in ipairs(nodes) do
-            if nodes[i] == "stop" then break end
-            
             moved_nodes[i] = {}
             moved_nodes[i].oldpos = nodes[i].pos
             nodes[i].pos = vector.add(nodes[i].pos, movedir)
@@ -1326,4 +1313,4 @@ end
 
         return true, nodes, oldstack
     end
-end]]
+end

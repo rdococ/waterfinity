@@ -655,9 +655,13 @@ function waterfinity.register_liquid(liquidDef)
                     local levelGiven = node.name == liquidDef.flowing and min(i, MAX_LVL - level) or i
                     local newLevel = node.name == liquidDef.flowing and level + levelGiven or levelGiven
                     local giveBack = i - levelGiven == 0 and "bucket:bucket_empty" or sanitizedBucket .. "_" .. i - levelGiven
-                    assert(level + i == newLevel + (i - levelGiven))
                     
                     setLiquid(lpos, liquidDef.flowing, newLevel)
+                    if node.name ~= liquidDef.flowing then
+                        return ItemStack("bucket:bucket_empty")
+                    end
+                    assert(level + i == newLevel + (i - levelGiven))
+                    
                     update(lpos)
                     return ItemStack(giveBack)
                 end
@@ -1091,6 +1095,21 @@ elseif default then
     end
 end
 
+do
+    local oldcheck = minetest.check_for_falling
+    function minetest.check_for_falling(pos)
+        update(pos)
+        return oldcheck(pos)
+    end
+end
+do
+    local oldcheck = minetest.check_single_for_falling
+    function minetest.check_single_for_falling(pos)
+        update(pos)
+        return oldcheck(pos)
+    end
+end
+
 if minetest.get_modpath("mesecons") then
     local function on_mvps_move(moved_nodes)
         for _, callback in ipairs(mesecon.on_mvps_move) do
@@ -1195,7 +1214,7 @@ if minetest.get_modpath("mesecons") then
                     local compp = vector.subtract(np, dir)
                     for i = compress.count, 1, -1 do
                         local comphash = minetest.hash_node_position(compp)
-                        nodes[liquid_data[comphash].ind].set_level = math.floor(compress.total / compress.count) + (compress.total % compress.count >= i and 1 or 0)
+                        nodes[liquid_data[comphash].ind].node.param2 = math.floor(compress.total / compress.count) + (compress.total % compress.count >= i and 1 or 0) - 1
                         compp = vector.subtract(compp, dir)
                     end
                     
@@ -1231,86 +1250,10 @@ if minetest.get_modpath("mesecons") then
         return nodes
     end
     
-    -- pos: pos of mvps
-    -- stackdir: direction of building the stack
-    -- movedir: direction of actual movement
-    -- maximum: maximum nodes to be pushed
-    -- all_pull_sticky: All nodes are sticky in the direction that they are pulled from
-    -- player_name: Player responsible for the action.
-    --  - empty string means legacy MVPS, actual check depends on configuration
-    --  - "$unknown" is a sentinel for forcing the check
-    function mesecon.mvps_push_or_pull(pos, stackdir, movedir, maximum, all_pull_sticky, player_name)
-        local nodes = mesecon.mvps_get_stack(pos, movedir, maximum, all_pull_sticky)
-
-        if not nodes then return end
-
-        local protection_check_set = {}
-        if vector.equals(stackdir, movedir) then -- pushing
-            add_pos(protection_check_set, pos)
+    mesecon.register_on_mvps_move(function(moved_nodes)
+        for _, data in ipairs(moved_nodes) do
+            update(data.oldpos)
+            update(data.pos)
         end
-        -- determine if one of the nodes blocks the push / pull
-        for id, n in ipairs(nodes) do
-            if mesecon.is_mvps_stopper(n.node, movedir, nodes, id) then
-                return
-            end
-            add_pos(protection_check_set, n.pos)
-            add_pos(protection_check_set, vector.add(n.pos, movedir))
-        end
-        if are_protected(protection_check_set, player_name) then
-            return false, "protected"
-        end
-
-        -- remove all nodes
-        for _, n in ipairs(nodes) do
-            n.meta = minetest.get_meta(n.pos):to_table()
-            local node_timer = minetest.get_node_timer(n.pos)
-            if node_timer:is_started() then
-                n.node_timer = {node_timer:get_timeout(), node_timer:get_elapsed()}
-            end
-            minetest.remove_node(n.pos)
-        end
-
-        local oldstack = mesecon.tablecopy(nodes)
-
-        -- update mesecons for removed nodes ( has to be done after all nodes have been removed )
-        for _, n in ipairs(nodes) do
-            mesecon.on_dignode(n.pos, n.node)
-        end
-
-        -- add nodes
-        for _, n in ipairs(nodes) do
-            local np = vector.add(n.pos, movedir)
-
-            -- Turn off conductors in transit
-            local conductor = mesecon.get_conductor(n.node.name)
-            if conductor and conductor.state ~= mesecon.state.off then
-                n.node.name = conductor.offstate or conductor.states[1]
-            end
-
-            minetest.set_node(np, n.node)
-            if n.set_level then
-                setLiquidLevel(np, n.set_level)
-            end
-            
-            minetest.get_meta(np):from_table(n.meta)
-            if n.node_timer then
-                minetest.get_node_timer(np):set(unpack(n.node_timer))
-            end
-        end
-
-        local moved_nodes = {}
-        for i in ipairs(nodes) do
-            moved_nodes[i] = {}
-            moved_nodes[i].oldpos = nodes[i].pos
-            nodes[i].pos = vector.add(nodes[i].pos, movedir)
-            moved_nodes[i].pos = nodes[i].pos
-            moved_nodes[i].node = nodes[i].node
-            moved_nodes[i].meta = nodes[i].meta
-            moved_nodes[i].node_timer = nodes[i].node_timer
-        end
-
-        on_mvps_move(moved_nodes)
-
-        return true, nodes, oldstack
-    end
+    end)
 end

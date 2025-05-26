@@ -8,9 +8,9 @@ waterfinity_replace_mapgen (Replace mapgen water and lava) bool true
 # Requires: waterfinity_replace_mapgen, !waterfinity_override_all
 waterfinity_ocean_springs (Infinite oceans) bool true
 
-# Enable jittering for certain liquids.
-# Ensures lakes "fully" even out, but generates a lot of unnecessary updates.
-waterfinity_jitter (Jittering) bool false
+# Enable jitter for certain liquids.
+# Ensures lakes "fully" even out.
+waterfinity_jitter (Jitter) bool true
 
 # The time interval between waterfinity updates.
 # Lower values are smoother but impact performance.

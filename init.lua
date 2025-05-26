@@ -16,8 +16,10 @@ local set, get, swap, group = minetest.set_node, minetest.get_node, minetest.swa
 local getLevel, setLevel, getTimer = minetest.get_node_level, minetest.set_node_level, minetest.get_node_timer
 local defs, itemDefs = minetest.registered_nodes, minetest.registered_items
 local add, hash = vector.add, minetest.hash_node_position
-local floor, random, min, max = math.floor, math.random, math.min, math.max
+local floor, random, min, max, abs = math.floor, math.random, math.min, math.max, math.abs
 local insert = table.insert
+
+local jittercheck
 
 local MAX_LVL = 8
 
@@ -50,21 +52,6 @@ local naturalFlows = {
     {x = 0, y = 0, z = -1},
     {x = 1, y = 0, z = 0},
     {x = 0, y = 0, z = 1},
-}
-local naturalSinks = {
-    {x = 0, y = 1, z = 0},
-    {x = -1, y = 0, z = 0},
-    {x = 0, y = 0, z = -1},
-    {x = 1, y = 0, z = 0},
-    {x = 0, y = 0, z = 1},
-}
-local adjacent = {
-    {x = 0, y = -1, z = 0},
-    {x = -1, y = 0, z = 0},
-    {x = 0, y = 0, z = -1},
-    {x = 1, y = 0, z = 0},
-    {x = 0, y = 0, z = 1},
-    {x = 0, y = 1, z = 0},
 }
 local updateMask = {
     {x = 0, y = 0, z = 0},
@@ -107,7 +94,6 @@ local cardinals = {
 local permutations = {
     {1, 2, 3, 4}, {1, 2, 4, 3}, {1, 3, 2, 4}, {1, 3, 4, 2}, {1, 4, 2, 3}, {1, 4, 3, 2}, {2, 1, 3, 4}, {2, 1, 4, 3}, {2, 3, 1, 4}, {2, 3, 4, 1}, {2, 4, 1, 3}, {2, 4, 3, 1},
     {3, 1, 2, 4}, {3, 1, 4, 2}, {3, 2, 1, 4}, {3, 2, 4, 1}, {3, 4, 1, 2}, {3, 4, 2, 1}, {4, 1, 2, 3}, {4, 1, 3, 2}, {4, 2, 1, 3}, {4, 2, 3, 1}, {4, 3, 1, 2}, {4, 3, 2, 1}}
-local drain = {}
 
 local empty, air = {}, {name = "air"}
 local nop = function () end
@@ -248,6 +234,7 @@ if bucket then
 end
 
 local jitterEnabled = settings:get_bool("waterfinity_jitter")
+if jitterEnabled == nil then jitterEnabled = true end
 function waterfinity.register_liquid(liquidDef)
     local source, flowing = liquidDef.source, liquidDef.flowing
     local sanitizedBucket = liquidDef.bucket and liquidDef.bucket:sub(1, 1) == ":" and liquidDef.bucket:sub(2, -1) or liquidDef.bucket
@@ -312,9 +299,13 @@ function waterfinity.register_liquid(liquidDef)
     extra._waterfinity_drain_range = liquidDef.drain_range or 3
     extra._waterfinity_jitter = liquidDef.jitter ~= false and jitterEnabled
     
+    extra.groups.waterfinity_jitter = extra._waterfinity_jitter and 1 or nil
+    
     local construct = def.on_construct or nop
     extra.on_construct = function (pos, ...)
-        update(pos)
+        if jittercheck(pos) then
+            update(pos)
+        end
         return construct(pos, ...)
     end
     local afterPlace = def.after_place_node or nop
@@ -327,6 +318,8 @@ function waterfinity.register_liquid(liquidDef)
         error("Cannot register a waterfinity liquid with node timer!")
     end
     extra.on_timer = function (pos)
+        --minetest.chat_send_all("update")
+        
         local myNode = get(pos)
         local myLevel = getLiquidLevel(pos)
         local myTimer = getTimer(pos)
@@ -401,33 +394,6 @@ function waterfinity.register_liquid(liquidDef)
             return
         end
         
-        --[=[local oldLevel = myLevel
-        local perm = permutations[random(1, 24)]
-        for _, i in ipairs(perm) do
-            if myLevel < 2 then break end
-            local vecA = cardinals[perm[i]]
-            pos.x, pos.z = pos.x + vecA.x, pos.z + vecA.z
-            
-            local name = get(pos).name
-            local level = getLiquidLevel(pos)
-            local def = defs[name] or empty
-            
-            if name == flowing and myLevel > level or def.floodable then
-                if def.floodable then level = 0 end
-                set(pos, {name = flowing, param2 = level + 1})
-                pos.x, pos.z = pos.x - vecA.x, pos.z - vecA.z
-                myLevel = myLevel - 1
-            else
-                if name == source then
-                    myLevel = MAX_LVL
-                end
-                pos.x, pos.z = pos.x - vecA.x, pos.z - vecA.z
-            end
-        end
-        if myLevel ~= oldLevel then
-            set(pos, {name = flowing, param2 = myLevel})
-        end]=]
-        
         local minlvl, maxlvl, sum, spreads = myLevel, myLevel, myLevel, {zero, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
         local test = {[hash(pos)] = true}
         
@@ -492,6 +458,7 @@ function waterfinity.register_liquid(liquidDef)
             pos.x, pos.z = pos.x - vecA.x, pos.z - vecA.z
         end
         
+        if maxlvl == minlvl then return end
         if maxlvl - minlvl < 2 then
             if not def._waterfinity_jitter then return end
             
@@ -512,7 +479,7 @@ function waterfinity.register_liquid(liquidDef)
                     pos.x, pos.z = pos.x - vec.x, pos.z - vec.z
                     if neighLvl == 0 then
                         set(pos, air)
-                        update(pos)
+                        --update(pos)
                     else
                         set(pos, neighNode)
                     end
@@ -671,6 +638,53 @@ function waterfinity.register_liquid(liquidDef)
     end
 end
 
+jittercheck = function (pos)
+    local myname = get(pos).name
+    local mytype = defs[myname]._waterfinity_flowing
+    local source = defs[myname]._waterfinity_source
+    local mylevel = getLiquidLevel(pos)
+    
+    pos.y = pos.y-1
+    
+    local bdef = defs[get(pos).name]
+    local below = getLiquidLevel(pos)
+    local btype = bdef._waterfinity_flowing
+    
+    pos.y = pos.y+1
+    if below < MAX_LVL and (bdef.floodable or btype == mytype) then return true end
+    
+    for _, vec in ipairs(cardinals) do
+        pos.x, pos.z = pos.x+vec.x, pos.z+vec.z
+        
+        local level = getLiquidLevel(pos)
+        local name = get(pos).name
+        local ndef = defs[name]
+        local ntype = ndef._waterfinity_flowing
+        
+        pos.x, pos.z = pos.x-vec.x, pos.z-vec.z
+        
+        if name == source and mylevel < MAX_LVL then return true end
+        if ntype == mytype and abs(level - mylevel) > 1 or ndef.floodable then
+            return true
+        end
+    end
+end
+if jitterEnabled then
+    minetest.register_abm {
+        label = "Waterfinity jitter",
+        nodenames = {"group:waterfinity_jitter"},
+        neighbors = {"air"},
+        interval = 1,
+        chance = 10,
+        catch_up = false,
+        action = function (pos, node)
+            return minetest.registered_nodes[node.name].on_timer(pos)
+        end
+    }
+else
+    jittercheck = function () return true end
+end
+
 minetest.register_on_dignode(function (pos)
     update(pos)
 end)
@@ -678,7 +692,11 @@ end)
 local getHashPos = minetest.get_position_from_hash
 minetest.register_on_mapblocks_changed(function (modified_blocks, modified_block_count)
     for hash, _ in pairs(modified_blocks) do
-        update(getHashPos(hash))
+        local pos = getHashPos(hash)
+        
+        if jittercheck(pos) then
+            update(pos)
+        end
     end
 end)
 

@@ -14,6 +14,7 @@ local settings = minetest.settings
 
 local set, get, swap, group = minetest.set_node, minetest.get_node, minetest.swap_node, minetest.get_item_group
 local getLevel, setLevel, getTimer = minetest.get_node_level, minetest.set_node_level, minetest.get_node_timer
+local getMeta = minetest.get_meta
 local defs, itemDefs = minetest.registered_nodes, minetest.registered_items
 local add, hash = vector.add, minetest.hash_node_position
 local floor, random, min, max, abs = math.floor, math.random, math.min, math.max, math.abs
@@ -45,6 +46,69 @@ local function setLiquid(pos, liquid, level)
     end
     set(pos, {name = liquid, param2 = level - 1})
 end
+
+function waterfinity.get_level(pos)
+    local name = get(pos).name
+    if name == defs[name]._waterfinity_source then
+        return MAX_LVL
+    end
+    return getLiquidLevel(pos)
+end
+waterfinity.set_level = setLiquidLevel
+waterfinity.set = setLiquid
+
+function waterfinity.pull(pos, liquid, level)
+    local name = get(pos).name
+    
+    if not level then
+        level = liquid
+        liquid = defs[name]._waterfinity_flowing
+        
+        if not liquid then return 0 end
+    end
+    
+    if name ~= liquid then
+        if name == defs[liquid]._waterfinity_source then
+            return MAX_LVL, liquid
+        end
+        return 0, liquid
+    end
+    
+    local current = getLiquidLevel(pos)
+    if current == 0 then return 0, liquid end
+    
+    local taken = min(current, level)
+    setLiquidLevel(pos, current - taken)
+    
+    return taken, liquid
+end
+function waterfinity.push(pos, liquid, level)
+    local name = get(pos).name
+    if name ~= liquid then
+        if name == defs[liquid]._waterfinity_source then
+            return 0
+        end
+        if not defs[name].floodable then
+            return level
+        end
+    end
+    
+    local current = getLiquidLevel(pos)
+    local added = min(level, MAX_LVL-current)
+    setLiquidLevel(pos, current + added)
+    
+    return level-added
+end
+
+--[[local function setMomentum(pos, mx, mz)
+    local meta = getMeta(pos)
+    if mx then meta:set_float("mx", mx) end
+    if mz then meta:set_float("mz", mz) end
+end
+local function getMomentum(pos)
+    local meta = getMeta(pos)
+    return meta:get_float("mx") or 0, meta:get_float("mz") or 0
+end]]
 
 local naturalFlows = {
     {x = 0, y = -1, z = 0},
@@ -250,7 +314,7 @@ function waterfinity.register_liquid(liquidDef)
         extra._waterfinity_source = source
         extra._waterfinity_flowing = flowing
         extra._waterfinity_drain_range = liquidDef.drain_range or 3
-        extra._waterfinity_jitter = liquidDef.jitter ~= false and jitterEnabled
+        --extra._waterfinity_jitter = liquidDef.jitter ~= false and jitterEnabled
         
         local construct = def.on_construct or nop
         extra.on_construct = function (pos, ...)
@@ -318,8 +382,6 @@ function waterfinity.register_liquid(liquidDef)
         error("Cannot register a waterfinity liquid with node timer!")
     end
     extra.on_timer = function (pos)
-        --minetest.chat_send_all("update")
-        
         local myNode = get(pos)
         local myLevel = getLiquidLevel(pos)
         local myTimer = getTimer(pos)
@@ -338,6 +400,7 @@ function waterfinity.register_liquid(liquidDef)
             return
         end
         
+        -- Renewability
         local renewable = belowName == source or belowName ~= flowing and not belowDef.floodable
         if renewable then
             pos.y = pos.y + 1
@@ -360,6 +423,7 @@ function waterfinity.register_liquid(liquidDef)
             pos.y = pos.y - 1
         end
         
+        -- Falling fluid
         if belowDef.floodable or belowName == flowing and getLiquidLevel(pos) < MAX_LVL or belowName == source then
             local belowLvl = (belowDef.floodable or belowName == source) and 0 or getLiquidLevel(pos)
             local levelGiven = min(MAX_LVL - belowLvl, myLevel)
@@ -381,6 +445,7 @@ function waterfinity.register_liquid(liquidDef)
             return
         end
         
+        -- Thin liquid draining
         pos.y = pos.y + 1
         if myLevel == 1 then
             local dir = (searchDrain(pos) or empty).dir
@@ -394,16 +459,35 @@ function waterfinity.register_liquid(liquidDef)
             return
         end
         
+        -- Spread, with provisions to restrict spread if a waterfall is detected
         local minlvl, maxlvl, sum, spreads = myLevel, myLevel, myLevel, {zero, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
         local test = {[hash(pos)] = true}
+        local bflood = false
         
         local perm = permutations[random(1, 24)]
         for _, i in ipairs(perm) do
             local vecA = cardinals[perm[i]]
             pos.x, pos.z = pos.x + vecA.x, pos.z + vecA.z
             
+            pos.y = pos.y - 1
+            local name = get(pos).name
+            local level = getLiquidLevel(pos)
+            local def = defs[name] or empty
+            
+            local fail = false
+            if name == flowing and level < 8 or def.floodable then
+                if not bflood then
+                    bflood = true
+                    minlvl, maxlvl, sum, spreads = myLevel, myLevel, myLevel, {zero, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
+                end
+            elseif bflood then
+                fail = true
+            end
+            
+            pos.y = pos.y + 1
+
             local pstr = hash(pos)
-            if not test[pstr] then
+            if not fail and not test[pstr] then
                 test[pstr] = true
                 
                 local name = get(pos).name
@@ -416,35 +500,37 @@ function waterfinity.register_liquid(liquidDef)
                     minlvl = minlvl < level and minlvl or level
                     spreads[#spreads + 1] = vecA
                     
-                    local perm = permutations[random(1, 24)]
-                    for _, i in ipairs(perm) do
-                        local vecB = cardinals[perm[i]]
-                        local fullVec = {x = vecA.x + vecB.x, z = vecA.z + vecB.z}
-                        
-                        pos.x, pos.z = pos.x + vecB.x, pos.z + vecB.z
-                        local pstr = hash(pos)
-                        if not test[pstr] then
-                            test[pstr] = true
+                    if not bflood then
+                        local perm = permutations[random(1, 24)]
+                        for _, i in ipairs(perm) do
+                            local vecB = cardinals[perm[i]]
+                            local fullVec = {x = vecA.x + vecB.x, z = vecA.z + vecB.z}
                             
-                            local name = get(pos).name
-                            local level = getLiquidLevel(pos)
-                            local def = defs[name] or empty
-                            
-                            if name == flowing then
-                                sum = sum + level
-                                maxlvl = maxlvl > level and maxlvl or level
-                                minlvl = minlvl < level and minlvl or level
-                                spreads[#spreads + 1] = fullVec
-                            elseif name == source then
-                                sum = sum + MAX_LVL
-                                maxlvl = MAX_LVL
-                            elseif def.floodable then
-                                minlvl = 0
-                                spreads[#spreads + 1] = fullVec
+                            pos.x, pos.z = pos.x + vecB.x, pos.z + vecB.z
+                            local pstr = hash(pos)
+                            if not test[pstr] then
+                                test[pstr] = true
+                                
+                                local name = get(pos).name
+                                local level = getLiquidLevel(pos)
+                                local def = defs[name] or empty
+                                
+                                if name == flowing then
+                                    sum = sum + level
+                                    maxlvl = maxlvl > level and maxlvl or level
+                                    minlvl = minlvl < level and minlvl or level
+                                    spreads[#spreads + 1] = fullVec
+                                elseif name == source then
+                                    sum = sum + MAX_LVL
+                                    maxlvl = MAX_LVL
+                                elseif def.floodable then
+                                    minlvl = 0
+                                    spreads[#spreads + 1] = fullVec
+                                end
+                                
                             end
-                            
+                            pos.x, pos.z = pos.x - vecB.x, pos.z - vecB.z
                         end
-                        pos.x, pos.z = pos.x - vecB.x, pos.z - vecB.z
                     end
                 elseif name == source then
                     sum = sum + MAX_LVL
@@ -459,6 +545,8 @@ function waterfinity.register_liquid(liquidDef)
         end
         
         if maxlvl == minlvl then return end
+        
+        -- Small-scale jitter step. Not sure if necessary anymore
         if maxlvl - minlvl < 2 then
             if not def._waterfinity_jitter then return end
             
@@ -491,8 +579,16 @@ function waterfinity.register_liquid(liquidDef)
             
             return
         end
+        
+        -- Finally, apply the results from our spreading logic
         if sum > #spreads * MAX_LVL then
             sum = #spreads * MAX_LVL
+        end
+        
+        if bflood and sum <= (#spreads-1) * MAX_LVL then
+            -- spreads[1] will always be the original node
+            table.remove(spreads, 1)
+            set(pos, air)
         end
         
         local average, leftover = floor(sum / #spreads), sum % #spreads
@@ -512,7 +608,7 @@ function waterfinity.register_liquid(liquidDef)
             pos.x, pos.z = pos.x - vec.x, pos.z - vec.z
         end
         
-        assert(sum == 0)
+        --assert(sum == 0)
     end
     
     if liquidDef.bucket then
@@ -634,6 +730,52 @@ function waterfinity.register_liquid(liquidDef)
                 end
             })
         end
+        
+        -- Merge two buckets
+        for a = 1, MAX_LVL-1 do
+            for b = 1, min(a, MAX_LVL-a) do
+                minetest.register_craft {
+                    output = liquidDef.bucket.."_"..(a+b),
+                    type = "shapeless",
+                    recipe = {liquidDef.bucket.."_"..a, liquidDef.bucket.."_"..b},
+                    replacements = {
+                        {liquidDef.bucket.."_"..a, "bucket:bucket_empty"}
+                    }
+                }
+            end
+        end
+        
+        -- Partition a bucket into min-lvl buckets
+        for a = 2, MAX_LVL do
+            local recipe = {liquidDef.bucket.."_"..a}
+            for i = 1, a-1 do
+                recipe[#recipe+1] = "bucket:bucket_empty"
+            end
+            
+            minetest.register_craft {
+                output = liquidDef.bucket.."_1 "..a,
+                type = "shapeless",
+                recipe = recipe
+            }
+        end
+        
+        -- Combine three or more min-lvl buckets
+        for a = 1, MAX_LVL do
+            local recipe, repl = {}, {}
+            for i = 1,a do
+                recipe[#recipe+1] = liquidDef.bucket.."_1"
+                repl[#repl+1] = {liquidDef.bucket.."_1", "bucket:bucket_empty"}
+            end
+            repl[#repl] = nil
+            
+            minetest.register_craft {
+                output = liquidDef.bucket.."_"..a,
+                type = "shapeless",
+                recipe = recipe,
+                replacements = repl
+            }
+        end
+        
         minetest.register_alias(sanitizedBucket .. "_" .. MAX_LVL, sanitizedBucket)
     end
 end
@@ -673,12 +815,94 @@ if jitterEnabled then
     minetest.register_abm {
         label = "Waterfinity jitter",
         nodenames = {"group:waterfinity_jitter"},
-        neighbors = {"air"},
+        neighbors = {},
         interval = 1,
-        chance = 10,
+        chance = 5,
         catch_up = false,
         action = function (pos, node)
-            return minetest.registered_nodes[node.name].on_timer(pos)
+            --minetest.registered_nodes[node.name].on_timer(pos)
+            
+            local mylvl = getLiquidLevel(pos)
+            if mylvl == 8 then
+                pos.y = pos.y + 1
+                local above = get(pos)
+                if above.name == node.name then
+                    return
+                end
+                pos.y = pos.y - 1
+            end
+            
+            local dir = cardinals[random(1, 4)]
+            local otherx, otherz = dir.z, dir.x
+            if random(1,2) == 1 then
+                otherx = -otherx
+                otherz = -otherz
+            end
+            
+            local x, z = pos.x, pos.z
+            local cx, cz, candlvl = pos.x, pos.z, mylvl
+            
+            local found = {}
+            
+            for i = 1, min(10/random(), 100) do
+                pos.x, pos.z = pos.x + dir.x, pos.z + dir.z --(choice==1 and otherx or dir.x), pos.z + (choice==1 and otherz or dir.z)
+                local neigh = get(pos)
+                
+                local hash = ("%s,%s"):format(pos.x, pos.z)
+                if found[hash] or neigh.name ~= node.name then
+                    pos.x, pos.z = pos.x - dir.x + otherx, pos.z - dir.z + otherz
+                    hash = ("%s,%s"):format(pos.x, pos.z)
+                    neigh = get(pos)
+                    
+                    if found[hash] or neigh.name ~= node.name then
+                        pos.x, pos.z = pos.x - 2*otherx, pos.z - 2*otherz
+                        hash = ("%s,%s"):format(pos.x, pos.z)
+                        neigh = get(pos)
+                    
+                        if found[hash] or neigh.name ~= node.name then
+                            pos.x, pos.z = pos.x + otherx - dir.x, pos.z + otherz - dir.z
+                            hash = ("%s,%s"):format(pos.x, pos.z)
+                            neigh = get(pos)
+                            
+                            if found[hash] or neigh.name ~= node.name then
+                                break
+                            end
+                        end
+                    end
+                end
+                found[hash] = true
+                
+                local neighlvl = getLiquidLevel(pos)
+                
+                if neighlvl < candlvl then
+                    cx, cz = pos.x, pos.z
+                    candlvl = neighlvl
+                end
+            end
+            
+            if candlvl < mylvl - 1 then
+                local sum = mylvl + candlvl
+                local left = 0
+                if sum > 8 then
+                    left = sum - 8
+                    sum = 8
+                else
+                    sum = sum - 1
+                    left = 1
+                end
+                
+                local y = pos.y
+                
+                pos.x,pos.z = cx,cz
+                setLiquidLevel(pos, sum)
+                minetest.registered_nodes[node.name].on_timer(pos)
+                
+                pos.x, pos.y, pos.z = x, y, z
+                setLiquidLevel(pos, left)
+                minetest.registered_nodes[node.name].on_timer(pos)
+                
+                return
+            end
         end
     }
 else
@@ -689,22 +913,39 @@ minetest.register_on_dignode(function (pos)
     update(pos)
 end)
 
-local getHashPos = minetest.get_position_from_hash
+--[[local getHashPos = minetest.get_position_from_hash
 minetest.register_on_mapblocks_changed(function (modified_blocks, modified_block_count)
     for hash, _ in pairs(modified_blocks) do
         local pos = getHashPos(hash)
         
-        if jittercheck(pos) then
+        local node = get(pos)
+        local def = defs[node.name] or empty
+        local timeout = def._waterfinity_flowing and getTimer(pos):get_timeout() or 0
+        
+        if timeout == 0 and jittercheck(pos) then
             update(pos)
         end
     end
-end)
+end)]]
 
 local checkFalling = minetest.check_for_falling
 minetest.check_for_falling = function (pos, ...)
     update(pos)
     return checkFalling(pos, ...)
 end
+
+local function texturegen(part, full)
+    if not full then full = part end
+    local textures = {}
+    
+    for i = 0, 6 do
+        table.insert(textures, ("%s^(waterfinity_bucket_bars.png^[sheet:1x8:0,%s)"):format(part, i))
+    end
+    table.insert(textures, ("%s^(waterfinity_bucket_bars.png^[sheet:1x8:0,7)"):format(full))
+    
+    return textures
+end
+waterfinity.bucket_textures = texturegen
 
 if settings:get_bool("waterfinity_override_all") then
     local liquids, flowingAlts = {}, {}
@@ -746,16 +987,7 @@ if settings:get_bool("waterfinity_override_all") then
             
             liquidDef.bucket = ":" .. bucketName
             liquidDef.bucket_desc = bucketDef.description
-            liquidDef.bucket_images = {
-                ("%s^waterfinity_bucket_bar_1.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_2.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_3.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_4.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_5.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_6.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_7.png"):format(bucketDef.inventory_image),
-                ("%s^waterfinity_bucket_bar_8.png"):format(bucketDef.inventory_image)
-            }
+            liquidDef.bucket_images = texturegen(bucketDef.inventory_image)
         end
         
         waterfinity.register_liquid(liquidDef)
@@ -849,29 +1081,33 @@ if settings:get_bool("waterfinity_override_all") then
         end
     end
 elseif default then
+    local textureStill = "default_water.png^[multiply:#CCCCCC^[opacity:220" -- "waterfinity_spring.png"
+    local animStill = "default_water_source_animated.png^[multiply:#CCCCCC^[opacity:220" -- "waterfinity_spring_animated.png"
+    local animFlow = "default_water_flowing_animated.png^[multiply:#CCCCCC^[opacity:220" -- "default_water_source_animated.png"
+    
     minetest.register_node("waterfinity:water", {
         description = S("Finite Water"),
-        tiles = {"waterfinity_spring.png"},
+        tiles = {textureStill},
         special_tiles = {
             {
-                name = "waterfinity_spring_animated.png",
+                name = animStill,
                 backface_culling = false,
                 animation = {
                     type = "vertical_frames",
                     aspect_w = 16,
                     aspect_h = 16,
                     length = 2,
-                },
+                }
             },
             {
-                name = "waterfinity_water_animated.png",
+                name = animFlow,
                 backface_culling = true,
                 animation = {
                     type = "vertical_frames",
                     aspect_w = 16,
                     aspect_h = 16,
                     length = 0.5,
-                },
+                }
             },
         },
         
@@ -902,7 +1138,7 @@ elseif default then
     minetest.register_node("waterfinity:spring", {
         description = S("Finite Water Spring"),
         tiles = {{
-            name = "waterfinity_spring_animated.png",
+            name = animStill,
             backface_culling = false,
             animation = {
                 type = "vertical_frames",
@@ -990,16 +1226,7 @@ elseif default then
         bucket = "waterfinity:bucket_water",
         bucket_desc = S("Finite Water Bucket"),
         
-        bucket_images = {
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_1.png",
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_2.png",
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_3.png",
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_4.png",
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_5.png",
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_6.png",
-            "waterfinity_bucket_water_part.png^waterfinity_bucket_bar_7.png",
-            "waterfinity_bucket_water.png^waterfinity_bucket_bar_8.png"
-        }
+        bucket_images = texturegen("bucket_water.png")-- ("waterfinity_bucket_water_part.png", "waterfinity_bucket_water.png")
     }
     waterfinity.register_liquid {
         flowing = "waterfinity:lava",
@@ -1009,16 +1236,7 @@ elseif default then
         
         bucket = "waterfinity:bucket_lava",
         bucket_desc = S("Finite Lava Bucket"),
-        bucket_images = {
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_1.png",
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_2.png",
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_3.png",
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_4.png",
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_5.png",
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_6.png",
-            "waterfinity_bucket_lava_part.png^waterfinity_bucket_bar_7.png",
-            "bucket_lava.png^waterfinity_bucket_bar_8.png"
-        }
+        bucket_images = texturegen("bucket_lava.png")--("waterfinity_bucket_lava_part.png", "bucket_lava.png")
     }
     
     if bucket then
@@ -1087,7 +1305,7 @@ elseif default then
             vm:set_param2_data(paramData)
             vm:calc_lighting()
             vm:write_to_map()
-            vm:update_liquids()
+            --vm:update_liquids()
         end)
     end
     

@@ -1128,7 +1128,7 @@ elseif default then
         liquid_alternative_source = "waterfinity:spring",
         liquid_alternative_flowing = "waterfinity:water",
         
-        post_effect_color = {r = 30, g = 70, b = 90, a = 103},
+        post_effect_color = {r = 30, g = 60, b = 90, a = 103},
         
         leveled_max = MAX_LVL - 1,
         
@@ -1164,7 +1164,7 @@ elseif default then
         liquid_alternative_source = "waterfinity:spring",
         liquid_alternative_flowing = "waterfinity:water",
         
-        post_effect_color = {r = 30, g = 70, b = 90, a = 103},
+        post_effect_color = {r = 30, g = 60, b = 90, a = 103},
         
         on_blast = function (pos, intensity) end,
         sounds = default.node_sound_water_defaults()

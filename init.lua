@@ -218,8 +218,10 @@ local function update(pos)
         local timeout = timer:get_timeout()
         
         if group(node.name, "waterfinity") > 0 and timeout == 0 then
+            local src = def._waterfinity_source == node.name and 1/131072 or 0
+            
             local uptime = minetest.get_server_uptime()
-            timer:start(updateInterval - (uptime % updateInterval) + pos.y * 1/65536)
+            timer:start(updateInterval - (uptime % updateInterval) + pos.y * 1/65536 + src)
         end
         
         pos.x, pos.y, pos.z = pos.x - vec.x, pos.y - vec.y, pos.z - vec.z
@@ -470,15 +472,16 @@ function waterfinity.register_liquid(liquidDef)
             pos.x, pos.z = pos.x + vecA.x, pos.z + vecA.z
             
             pos.y = pos.y - 1
+            
             local name = get(pos).name
             local level = getLiquidLevel(pos)
             local def = defs[name] or empty
             
             local fail = false
+            local maybflood = false
             if name == flowing and level < 8 or def.floodable then
                 if not bflood then
-                    bflood = true
-                    minlvl, maxlvl, sum, spreads = myLevel, myLevel, myLevel, {zero, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
+                    maybflood = true
                 end
             elseif bflood then
                 fail = true
@@ -494,6 +497,10 @@ function waterfinity.register_liquid(liquidDef)
                 local level = getLiquidLevel(pos)
                 local def = defs[name] or empty
                 
+                if maybflood and (name == flowing or def.floodable) then
+                    bflood = true
+                    minlvl, maxlvl, sum, spreads = myLevel, myLevel, myLevel, {zero, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
+                end
                 if name == flowing then
                     sum = sum + level
                     maxlvl = maxlvl > level and maxlvl or level

@@ -795,7 +795,7 @@ jittercheck = function (pos)
     
     pos.y = pos.y-1
     
-    local bdef = defs[get(pos).name]
+    local bdef = defs[get(pos).name] or {}
     local below = getLiquidLevel(pos)
     local btype = bdef._waterfinity_flowing
     
@@ -807,7 +807,7 @@ jittercheck = function (pos)
         
         local level = getLiquidLevel(pos)
         local name = get(pos).name
-        local ndef = defs[name]
+        local ndef = defs[name] or {}
         local ntype = ndef._waterfinity_flowing
         
         pos.x, pos.z = pos.x-vec.x, pos.z-vec.z
